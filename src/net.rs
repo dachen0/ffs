@@ -1,19 +1,22 @@
-use std::{hash::Hash, net::{IpAddr, UdpSocket}};
+use std::{
+    hash::Hash,
+    net::{IpAddr, UdpSocket},
+};
 
 use wincode::{SchemaRead, SchemaWrite};
 
 pub(crate) struct NetConfig {
     bind_ip: IpAddr,
     udp_port: u16,
-    pub udp_packet_data_size: usize,
+    pub udp_packet_data_size: u64,
 }
 
 impl NetConfig {
-    pub fn new(bind_ip: IpAddr, udp_port: u16, udp_packet_data_size: usize) -> Self {
+    pub fn new(bind_ip: IpAddr, udp_port: u16, udp_packet_data_size: u64) -> Self {
         Self {
             bind_ip,
             udp_port,
-            udp_packet_data_size
+            udp_packet_data_size,
         }
     }
 
@@ -22,71 +25,80 @@ impl NetConfig {
     }
 }
 
-#[derive(SchemaWrite, SchemaRead)]
-pub(crate) struct Packet {
-    id: u64,
-    pub inner: PacketType,
-}
-
-#[derive(SchemaWrite, SchemaRead)]
-pub(crate) enum PacketType {
+#[derive(SchemaWrite, SchemaRead, Debug)]
+pub(crate) enum Packet {
     Data(DataPacket),
-    Metadata(MetadataPacket),
+    FileMetadata(FileMetadataPacket),
+    DataMetadata(DataMetadataPacket),
     Protocol(ProtocolPacket),
 }
 
-#[derive(SchemaWrite, SchemaRead, Clone)]
+#[derive(SchemaWrite, SchemaRead, Clone, Debug)]
 pub(crate) struct DataPacket {
-    offset: usize,
-    data: Vec<u8>
+    pub offset: u64,
+    pub data: Vec<u8>,
 }
 
 impl DataPacket {
-    pub fn new(offset: usize, data: &[u8]) -> Self {
+    pub fn new(offset: u64, data: &[u8]) -> Self {
         // Note: this is horribly inefficient right now
         let data = data.to_vec();
+        Self { offset, data }
+    }
+}
+
+#[derive(SchemaWrite, SchemaRead, Debug)]
+pub(crate) struct FileMetadataPacket {
+    pub file_path: String,
+    pub file_hash: [u8; 32],
+    pub file_len: u64,
+}
+
+impl FileMetadataPacket {
+    pub fn new(file_path: String, file_hash: [u8; 32], len: u64) -> Self {
         Self {
-            offset,
-            data
+            file_path,
+            file_hash,
+            file_len: len,
         }
     }
 }
 
-#[derive(SchemaWrite, SchemaRead)]
-pub(crate) struct MetadataPacket {
+#[derive(SchemaWrite, SchemaRead, Debug)]
+pub(crate) struct DataMetadataPacket {
     file_hash: [u8; 32],
     // list of tuples (offset, hash)
-    checksums: Vec<(usize, [u8; 32])>,
+    checksums: Vec<(u64, [u8; 32])>,
 }
 
-impl MetadataPacket {
-    pub fn new_from_data_packets(file_hash: [u8;32], packets: &[DataPacket]) -> Self {
-        let checksums = packets.iter().map(|packet| {
-            (packet.offset, *blake3::hash(&packet.data).as_bytes())
-        }).collect();
+impl DataMetadataPacket {
+    pub fn new_from_data_packets(file_hash: [u8; 32], packets: &[DataPacket]) -> Self {
+        let checksums = packets
+            .iter()
+            .map(|packet| (packet.offset, *blake3::hash(&packet.data).as_bytes()))
+            .collect();
 
         Self {
             file_hash,
-            checksums
+            checksums,
         }
     }
 }
 
-#[derive(SchemaWrite, SchemaRead)]
+#[derive(SchemaWrite, SchemaRead, Debug)]
 pub(crate) enum ProtocolPacket {
     FileRequest,
-    Ack
+    Ack,
 }
-
 
 #[cfg(test)]
 mod tests {
-    use crate::net::{DataPacket, MetadataPacket};
+    use crate::net::{DataMetadataPacket, DataPacket};
 
     #[test]
     fn sanity_metadata() {
         let data = vec![0; 100];
         let data_packets = vec![DataPacket::new(0, &data); 20];
-        let _metadata_packet = MetadataPacket::new_from_data_packets([0u8; 32], &data_packets);
+        let _metadata_packet = DataMetadataPacket::new_from_data_packets([0u8; 32], &data_packets);
     }
 }

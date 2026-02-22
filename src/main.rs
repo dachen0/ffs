@@ -1,13 +1,16 @@
-use std::{net::IpAddr, str::FromStr};
+use std::{
+    net::{IpAddr, SocketAddr},
+    str::FromStr,
+};
 
 use clap::{Parser, ValueEnum};
 
-use crate::{net::NetConfig, server::Server};
+use crate::{client::Client, net::NetConfig, server::Server};
 
 mod client;
+mod fs;
 mod net;
 mod server;
-mod fs;
 
 #[derive(ValueEnum, Clone, Parser, Debug)]
 enum Mode {
@@ -33,17 +36,38 @@ struct Args {
     /// Port
     #[arg(short, long)]
     udp_port: u16,
+
+    /// Recipients
+    #[arg(short, long)]
+    recipients: Option<Vec<String>>,
 }
 
 fn main() {
     let args = Args::parse();
 
-    let net_config = NetConfig::new(IpAddr::from_str(&args.ip).expect(&("Couldn't parse provided ip ".to_owned() + &args.ip)), args.udp_port, 1232);
+    let net_config = NetConfig::new(
+        IpAddr::from_str(&args.ip).expect(&("Couldn't parse provided ip ".to_owned() + &args.ip)),
+        args.udp_port,
+        1232,
+    );
 
     match args.mode {
         Mode::Server => {
-            let server = Server::new(&args.file_path, net_config).unwrap();
+            let mut server = Server::new(&args.file_path, net_config).unwrap();
+            server
+                .send_file_to_addresses(
+                    &args
+                        .recipients
+                        .unwrap()
+                        .iter()
+                        .map(|r| SocketAddr::from_str(r).unwrap())
+                        .collect::<Vec<SocketAddr>>(),
+                )
+                .unwrap();
         }
-        Mode::Client => {}
+        Mode::Client => {
+            let mut client = Client::new(&args.file_path, net_config).unwrap();
+            client.receive_file().unwrap();
+        }
     };
 }
