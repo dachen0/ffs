@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     fs::{File, OpenOptions},
     io::{self, Seek, Write},
     net::UdpSocket,
@@ -10,7 +11,6 @@ use crate::net::{NetConfig, Packet};
 
 pub(crate) struct Client {
     file: File,
-    net_config: NetConfig,
     udp_socket: UdpSocket,
 }
 
@@ -22,34 +22,55 @@ impl Client {
             .truncate(true)
             .open(file_path)?;
         let udp_socket = net_config.get_udp_socket()?;
-        Ok(Self {
-            file,
-            net_config,
-            udp_socket,
-        })
+        Ok(Self { file, udp_socket })
     }
 
     pub fn receive_file(&mut self) -> io::Result<()> {
         let mut file_len = u64::MAX;
         let mut bytes_written = 0;
         let mut buf = [0u8; 5192];
+        let mut data_packet_checksums = BTreeMap::new();
+        let mut pending_data_packets = Vec::new();
         let file = &mut self.file;
         loop {
-            let (received_bytes, src) = self.udp_socket.recv_from(&mut buf)?;
+            let (received_bytes, _src) = self.udp_socket.recv_from(&mut buf)?;
             if let Ok(packet) = Packet::deserialize(&buf[0..received_bytes]) {
                 match packet {
                     Packet::DataMetadata(metadata_packet) => {
-                        // currently usused
+                        for (offset, checksum) in metadata_packet.checksums {
+                            data_packet_checksums.insert(offset, checksum);
+                        }
                     }
                     Packet::FileMetadata(file_metadata_packet) => {
                         file_len = file_metadata_packet.file_len;
                     }
                     Packet::Data(data_packet) => {
+                        // only accept packets that should be inside the file
+                        // this before we check the checksums
+                        if data_packet.offset < file_len {
+                            pending_data_packets.push(data_packet);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            // @TODO - this triggers a vec realloc.
+            // It would be best to do it in place and filter `pending_data_packets` in place
+            // but it works for now.
+            let currently_pending_data_packets =
+                std::mem::replace(&mut pending_data_packets, Vec::new());
+            for data_packet in currently_pending_data_packets {
+                if let Some(checksum) = data_packet_checksums.get(&data_packet.offset) {
+                    // only write the packet if matches our checksum
+                    if checksum == &data_packet.get_checksum() {
                         file.seek(io::SeekFrom::Start(data_packet.offset))?;
                         file.write_all(&data_packet.data)?;
                         bytes_written += data_packet.data.len();
                     }
-                    _ => {}
+                } else {
+                    // if we don't have the checksum for this packet yet, store it and wait for checksums
+                    pending_data_packets.push(data_packet);
                 }
             }
 

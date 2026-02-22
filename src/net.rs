@@ -1,7 +1,4 @@
-use std::{
-    hash::Hash,
-    net::{IpAddr, UdpSocket},
-};
+use std::net::{IpAddr, UdpSocket};
 
 use wincode::{SchemaRead, SchemaWrite};
 
@@ -45,6 +42,10 @@ impl DataPacket {
         let data = data.to_vec();
         Self { offset, data }
     }
+
+    pub fn get_checksum(&self) -> [u8; 32] {
+        *blake3::hash(&self.data).as_bytes()
+    }
 }
 
 #[derive(SchemaWrite, SchemaRead, Debug)]
@@ -66,16 +67,16 @@ impl FileMetadataPacket {
 
 #[derive(SchemaWrite, SchemaRead, Debug)]
 pub(crate) struct DataMetadataPacket {
-    file_hash: [u8; 32],
+    pub file_hash: [u8; 32],
     // list of tuples (offset, hash)
-    checksums: Vec<(u64, [u8; 32])>,
+    pub checksums: Vec<(u64, [u8; 32])>,
 }
 
 impl DataMetadataPacket {
     pub fn new_from_data_packets(file_hash: [u8; 32], packets: &[DataPacket]) -> Self {
         let checksums = packets
             .iter()
-            .map(|packet| (packet.offset, *blake3::hash(&packet.data).as_bytes()))
+            .map(|packet| (packet.offset, packet.get_checksum()))
             .collect();
 
         Self {

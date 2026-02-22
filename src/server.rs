@@ -33,14 +33,14 @@ impl Server {
         })
     }
 
-    pub fn listen(&mut self) -> io::Result<()> {
+    pub fn _listen(&mut self) -> io::Result<()> {
         let mut buf = [0u8; 5192];
         loop {
             let (received_bytes, src) = self.udp_socket.recv_from(&mut buf)?;
             if let Ok(packet) = Packet::deserialize(&buf[0..received_bytes]) {
                 match packet {
-                    Packet::DataMetadata(metadata_packet) => todo!(),
-                    Packet::Data(data_packet) => todo!(),
+                    Packet::DataMetadata(_metadata_packet) => todo!(),
+                    Packet::Data(_data_packet) => todo!(),
                     Packet::Protocol(protocol_packet) => match protocol_packet {
                         ProtocolPacket::FileRequest => {
                             self.send_file_to_addresses(&[src])?;
