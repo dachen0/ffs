@@ -1,5 +1,6 @@
 use std::net::{IpAddr, UdpSocket};
 
+use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey, ed25519::SignatureBytes};
 use wincode::{SchemaRead, SchemaWrite};
 
 pub(crate) struct NetConfig {
@@ -23,7 +24,45 @@ impl NetConfig {
 }
 
 #[derive(SchemaWrite, SchemaRead, Debug)]
-pub(crate) enum Packet {
+pub(crate) struct Packet {
+    pub signature: Option<SignatureBytes>,
+    pub packet: PacketEnum
+}
+
+// @TODO - the current Packet impl involves a lot of wincode serialize/deserialize
+// to create and verify the signature.
+// Instead of this we should zero copy the `PacketEnum` struct and use the ref.
+impl Packet {
+    pub fn new_signed_packet(packet: PacketEnum, signer: &SigningKey) -> Self {
+        let mut packet = Self::new_unsigned_packet(packet);
+        let signature = signer.sign(&wincode::serialize(&packet.packet).unwrap());
+        packet.signature = Some(signature.to_bytes());
+
+        packet
+    }
+
+    pub fn new_unsigned_packet(packet: PacketEnum) -> Self {
+        Self {
+            signature: None,
+            packet
+        }
+    }
+
+    /// Returns true ONLY if the signature is correct
+    pub fn verify_packet(&self, signer_pubkey: &VerifyingKey) -> bool {
+        if let Some(signature) = self.signature {
+            return signer_pubkey.verify(&wincode::serialize(&self.packet).unwrap(), &Signature::from_bytes(&signature)).is_ok()
+        }
+        return false
+    }
+
+    pub fn to_bytes(&self) -> Vec<u8> {
+        wincode::serialize(&self).unwrap()
+    }
+}
+
+#[derive(SchemaWrite, SchemaRead, Debug)]
+pub(crate) enum PacketEnum {
     Data(DataPacket),
     FileMetadata(FileMetadataPacket),
     DataMetadata(DataMetadataPacket),

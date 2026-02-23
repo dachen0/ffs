@@ -4,11 +4,12 @@ use std::{
     net::{SocketAddr, UdpSocket},
 };
 
+use ed25519_dalek::SigningKey;
 use wincode::Deserialize;
 
 use crate::{
     fs::get_file_hash,
-    net::{DataMetadataPacket, DataPacket, FileMetadataPacket, NetConfig, Packet, ProtocolPacket},
+    net::{DataMetadataPacket, DataPacket, FileMetadataPacket, NetConfig, Packet, PacketEnum, ProtocolPacket},
 };
 
 pub(crate) struct Server {
@@ -33,17 +34,17 @@ impl Server {
         })
     }
 
-    pub fn _listen(&mut self) -> io::Result<()> {
+    pub fn _listen(&mut self, signing_key: &SigningKey) -> io::Result<()> {
         let mut buf = [0u8; 5192];
         loop {
             let (received_bytes, src) = self.udp_socket.recv_from(&mut buf)?;
             if let Ok(packet) = Packet::deserialize(&buf[0..received_bytes]) {
-                match packet {
-                    Packet::DataMetadata(_metadata_packet) => todo!(),
-                    Packet::Data(_data_packet) => todo!(),
-                    Packet::Protocol(protocol_packet) => match protocol_packet {
+                match packet.packet {
+                    PacketEnum::DataMetadata(_metadata_packet) => todo!(),
+                    PacketEnum::Data(_data_packet) => todo!(),
+                    PacketEnum::Protocol(protocol_packet) => match protocol_packet {
                         ProtocolPacket::FileRequest => {
-                            self.send_file_to_addresses(&[src])?;
+                            self.send_file_to_addresses(&[src], signing_key)?;
                         }
                         ProtocolPacket::Ack => todo!(),
                     },
@@ -53,17 +54,17 @@ impl Server {
         }
     }
 
-    pub fn send_file_to_addresses(&mut self, recipients: &[SocketAddr]) -> io::Result<()> {
+    pub fn send_file_to_addresses(&mut self, recipients: &[SocketAddr], signing_key: &SigningKey) -> io::Result<()> {
         self.file.seek(SeekFrom::Start(0))?;
         let mut file_reader = BufReader::new(&self.file);
 
         // notify the clients of the file size
         let file_metadata = std::fs::metadata(&self.file_path)?;
-        let file_metadata_packet = Packet::FileMetadata(FileMetadataPacket::new(
+        let file_metadata_packet = Packet::new_signed_packet(PacketEnum::FileMetadata(FileMetadataPacket::new(
             self.file_path.clone(),
             self.file_hash,
             file_metadata.len(),
-        ));
+        )), signing_key);
         let serialized_file_metadata_packet = wincode::serialize(&file_metadata_packet).unwrap();
         debug_assert_eq!(
             self.udp_socket
@@ -91,11 +92,11 @@ impl Server {
                 })
                 .collect();
 
-            let metadata_packet = Packet::DataMetadata(DataMetadataPacket::new_from_data_packets(
+            let metadata_packet = Packet::new_signed_packet(PacketEnum::DataMetadata(DataMetadataPacket::new_from_data_packets(
                 self.file_hash,
                 &packets,
-            ));
-            let serialized_metadata_packet = wincode::serialize(&metadata_packet).unwrap();
+            )), signing_key);
+            let serialized_metadata_packet = metadata_packet.to_bytes();
             debug_assert_eq!(
                 self.udp_socket
                     .send_to(serialized_metadata_packet.as_slice(), recipients)?,
@@ -104,7 +105,7 @@ impl Server {
 
             for packet in packets {
                 // TODO: Store buffers that we can write into
-                let serialized_packet = wincode::serialize(&Packet::Data(packet)).unwrap();
+                let serialized_packet = Packet::new_unsigned_packet(PacketEnum::Data(packet)).to_bytes();
                 debug_assert_eq!(
                     self.udp_socket
                         .send_to(serialized_packet.as_slice(), recipients)?,

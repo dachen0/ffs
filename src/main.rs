@@ -4,6 +4,7 @@ use std::{
 };
 
 use clap::{Parser, ValueEnum};
+use ed25519_dalek::{SigningKey, VerifyingKey, pkcs8::{DecodePrivateKey, DecodePublicKey}};
 
 use crate::{client::Client, net::NetConfig, server::Server};
 
@@ -37,12 +38,20 @@ struct Args {
     #[arg(short, long)]
     udp_port: u16,
 
+    /// File path to a .pem file.
+    /// For server mode, this is a private key.
+    /// For client mode, this should be a public key corresponding
+    /// to the private key that the sender is using to sign.
+    #[arg(short, long)]
+    key_file_path: String,
+
     /// Recipients
     #[arg(short, long)]
     recipients: Option<Vec<String>>,
 }
 
 fn main() {
+    env_logger::init();
     let args = Args::parse();
 
     let net_config = NetConfig::new(
@@ -54,6 +63,7 @@ fn main() {
     match args.mode {
         Mode::Server => {
             let mut server = Server::new(&args.file_path, net_config).unwrap();
+            let signing_key = SigningKey::read_pkcs8_pem_file(args.key_file_path).unwrap();
             server
                 .send_file_to_addresses(
                     &args
@@ -62,12 +72,14 @@ fn main() {
                         .iter()
                         .map(|r| SocketAddr::from_str(r).unwrap())
                         .collect::<Vec<SocketAddr>>(),
+                        &signing_key
                 )
                 .unwrap();
         }
         Mode::Client => {
             let mut client = Client::new(&args.file_path, net_config).unwrap();
-            client.receive_file().unwrap();
+            let sender_public_key = VerifyingKey::read_public_key_pem_file(args.key_file_path).unwrap();
+            client.receive_file(&sender_public_key).unwrap();
         }
     };
 }

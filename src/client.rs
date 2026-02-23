@@ -5,9 +5,11 @@ use std::{
     net::UdpSocket,
 };
 
+use ed25519_dalek::VerifyingKey;
+use log::{debug, info, warn};
 use wincode::Deserialize;
 
-use crate::net::{NetConfig, Packet};
+use crate::net::{NetConfig, Packet, PacketEnum};
 
 pub(crate) struct Client {
     file: File,
@@ -25,7 +27,7 @@ impl Client {
         Ok(Self { file, udp_socket })
     }
 
-    pub fn receive_file(&mut self) -> io::Result<()> {
+    pub fn receive_file(&mut self, sender_pubkey: &VerifyingKey) -> io::Result<()> {
         let mut file_len = u64::MAX;
         let mut bytes_written = 0;
         let mut buf = [0u8; 5192];
@@ -35,16 +37,25 @@ impl Client {
         loop {
             let (received_bytes, _src) = self.udp_socket.recv_from(&mut buf)?;
             if let Ok(packet) = Packet::deserialize(&buf[0..received_bytes]) {
-                match packet {
-                    Packet::DataMetadata(metadata_packet) => {
-                        for (offset, checksum) in metadata_packet.checksums {
-                            data_packet_checksums.insert(offset, checksum);
+                debug!("Received packet {:?}", packet);
+                let packet_is_verified = packet.verify_packet(sender_pubkey);
+                if packet.signature.is_some() && !packet_is_verified {
+                    warn!("Packet failed verification: {:?}", packet);
+                }
+                match packet.packet {
+                    PacketEnum::DataMetadata(metadata_packet) => {
+                        if packet_is_verified {
+                            for (offset, checksum) in metadata_packet.checksums {
+                                data_packet_checksums.insert(offset, checksum);
+                            }
                         }
                     }
-                    Packet::FileMetadata(file_metadata_packet) => {
-                        file_len = file_metadata_packet.file_len;
+                    PacketEnum::FileMetadata(file_metadata_packet) => {
+                        if packet_is_verified {
+                            file_len = file_metadata_packet.file_len;
+                        }
                     }
-                    Packet::Data(data_packet) => {
+                    PacketEnum::Data(data_packet) => {
                         // only accept packets that should be inside the file
                         // this before we check the checksums
                         if data_packet.offset < file_len {
@@ -75,7 +86,7 @@ impl Client {
             }
 
             if bytes_written as u64 == file_len {
-                println!("download of {} bytes complete", bytes_written);
+                info!("Download of {} bytes complete", bytes_written);
                 break;
             }
         }
